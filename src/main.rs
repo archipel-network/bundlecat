@@ -1,5 +1,5 @@
 use std::{io::{stdin, stdout, Read, Write}, os::unix::net::UnixStream, path::PathBuf};
-use ud3tn_aap::Agent;
+use ud3tn_aap::{AapStream, Agent, BaseAgent, RegisteredAgent};
 use clap::{CommandFactory, Parser};
 
 #[derive(Debug, Parser)]
@@ -121,34 +121,46 @@ fn main() {
 
     log!(verbose, "Connected to node on {}", cli.node_sock.to_string_lossy());
 
-    let agent_id = (if cli.listen { 
-            cli.endpoint_id.clone()
-        } else {
-            cli.source_endpoint_id.clone()
-        }).unwrap_or_default()
-        .agent_id().map(|it| it.to_owned())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string() );
-
-    let agent = match Agent::connect_stream(Box::new(unix_stream), agent_id.clone()) {
+    let agent = match Agent::new(unix_stream) {
         Err(e) => {
-            eprint!("Failed to register agent {} on node: {e}", agent_id);
+            eprint!("Failed to establish a connection with node: {e}");
             std::process::exit(11);
         },
-        Ok(a) => a
+        Ok(a) => {
+            log!(verbose, "Welcome from node {}", a.node_id());
+            a
+        }
     };
-
 
     if (cli.listen && 
             cli.endpoint_id.as_ref().is_some_and(
-                |it| it.node_id().is_some_and(|it| it != agent.node_eid))) ||
+                |it| it.node_id().is_some_and(|it| it != agent.node_id()))) ||
         cli.source_endpoint_id.as_ref().is_some_and(
             |it| it.node_id()
-    .is_some_and(|it| it != agent.node_eid)) {
-        eprintln!("Provided node id is different from node id configured on server ({})", agent.node_eid);
+    .is_some_and(|it| it != agent.node_id())) {
+        eprintln!("Provided node id is different from node id configured on server ({})", agent.node_id());
         std::process::exit(2);
     }
 
-    log!(verbose, "Agent registered on endpoint {}{}", agent.node_eid, agent.agent_id);
+    let agent_id = (if cli.listen { 
+        cli.endpoint_id.clone()
+    } else {
+        cli.source_endpoint_id.clone()
+    }).unwrap_or_default()
+    .agent_id().map(|it| it.to_owned())
+    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string() );
+
+    let agent = match agent.register(agent_id.clone()) {
+        Err(e) => {
+            eprint!("Failed to establish a connection with node: {e}");
+            std::process::exit(11);
+        },
+        Ok(a) => {
+            log!(verbose, "Agent registered on endpoint {}{}", a.node_id(), a.agent_id());
+            a
+        }
+    };
+
 
     if cli.listen {
         receive(agent, verbose);
@@ -158,7 +170,7 @@ fn main() {
     }
 }
 
-fn send(mut agent: Agent, verbose: bool, destination: PartialEndpointId){
+fn send<S: AapStream>(mut agent: RegisteredAgent<S>, verbose: bool, destination: PartialEndpointId){
 
     let destination_eid = destination.0;
 
@@ -191,8 +203,8 @@ fn send(mut agent: Agent, verbose: bool, destination: PartialEndpointId){
     log!(verbose, "Sent {} byte bundle to {}", bundle_size, destination_eid);
 }
 
-fn receive(mut agent: Agent, verbose: bool){
-    let (source, mut content) = match agent.recv_bundle() {
+fn receive<S: AapStream>(mut agent: RegisteredAgent<S>, verbose: bool){
+    let mut bundle = match agent.recv_bundle() {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Failed to receive bundle: {e}");
@@ -200,9 +212,13 @@ fn receive(mut agent: Agent, verbose: bool){
         }
     };
 
-    log!(verbose, "Received bundle from {}", source);
+    if let Some(source) = bundle.source.as_ref() {
+        log!(verbose, "Received bundle from {}", source);
+    } else {
+        log!(verbose, "Received bundle from unknown source");
+    }
 
-    if let Err(e) = stdout().write_all(&mut content) {
+    if let Err(e) = stdout().write_all(&mut bundle.payload) {
         eprintln!("Failed to write to stdout: {e}");
         std::process::exit(16);
     }
