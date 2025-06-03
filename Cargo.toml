@@ -2,8 +2,21 @@
 name = "bundlecat"
 version = "0.2.0"
 edition = "2024"
+description = "Send and receive bundles on Archipel network"
+authors = ["EpicKiwi <me@epickiwi.fr>"]
 
 [dependencies]
 clap = { version = "4.5.38", features = ["derive"] }
 ud3tn-aap = { git = "https://github.com/archipel-network/rust-ud3tn.git", version = "1.0.0" }
 uuid = { version = "1.16.0", features = ["v4"] }
+
+[package.metadata.deb]
+maintainer = "EpicKiwi <me@epickiwi.fr>"
+license-file = ["LICENSE", "0"]
+depends = ["$auto", "archipel-core"]
+section = "net"
+priority = "optional"
+maintainer-scripts = "package"
+assets = [
+    ["target/release/bundlecat", "usr/bin/bundlecat", "755"],
+]
